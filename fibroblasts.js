@@ -1111,7 +1111,7 @@ async function loadInteractionData() {
     }
     
     try {
-        const response = await fetch('./data/fibroblasts/web_data/Cell_Interaction.json');
+        const response = await fetch('./data/Cell_Interaction.json');
         if (!response.ok) throw new Error('Interaction data not found');
         
         const interactionData = await response.json();
