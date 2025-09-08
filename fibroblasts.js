@@ -1392,7 +1392,7 @@ async function loadTrajectoryData() {
     }
     
     try {
-        const response = await fetch('/data/Trajectory_Data.json');
+        const response = await fetch('./data/Trajectory_Data.json');
         if (!response.ok) throw new Error('Trajectory data not found');
         
         const allTrajectoryData = await response.json();
@@ -1630,7 +1630,7 @@ async function createPseudotimeAnalysisPlot(trajectoryData) {
             return;
         }
         
-        const response = await fetch('/data/Pseudotime_Analysis.json');
+        const response = await fetch('./data/Pseudotime_Analysis.json');
         if (!response.ok) throw new Error('Pseudotime data not available');
         
         const pseudotimeData = await response.json();
@@ -1683,7 +1683,7 @@ async function populatePseudotimeGeneDropdown() {
     if (!dropdown) return;
     
     try {
-        const response = await fetch('/data/Pseudotime_Analysis.json');
+        const response = await fetch('./data/Pseudotime_Analysis.json');
         if (!response.ok) return;
         
         const pseudotimeData = await response.json();
