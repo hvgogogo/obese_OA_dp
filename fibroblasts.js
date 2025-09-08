@@ -1771,6 +1771,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Load static data
         loadStaticData();
+        populatePseudotimeGeneDropdown(); // Add this line
         
         console.log('✅ Fibroblasts GitHub Pages portal initialized successfully!');
         
