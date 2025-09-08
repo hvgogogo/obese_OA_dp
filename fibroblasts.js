@@ -1391,29 +1391,62 @@ async function loadTrajectoryData() {
         loadTrajectoryBtn.disabled = true;
     }
     
+    // Show loading state in all containers
+    const containers = ['trajectory-plot', 'trajectory-density-plot', 'trajectory-proportion-plot', 'pseudotime-analysis-plot'];
+    containers.forEach(containerId => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `
+                <div class="viz-placeholder">
+                    <div class="loading-spinner"></div>
+                    <p>🔄 Loading ${containerId.replace('-', ' ')}...</p>
+                </div>
+            `;
+        }
+    });
+    
     try {
+        // FIXED: Use correct relative path
         const response = await fetch('./data/Trajectory_Data.json');
-        if (!response.ok) throw new Error('Trajectory data not found');
-        
-        const allTrajectoryData = await response.json();
-        const trajectoryData = allTrajectoryData[dataset];  // Use selected dataset
-
-        if (!trajectoryData) {
-            throw new Error(`Dataset ${dataset} not found in trajectory data`);
+        if (!response.ok) {
+            throw new Error(`Failed to load trajectory data: ${response.status} ${response.statusText}`);
         }
         
+        const allTrajectoryData = await response.json();
+        
+        // Debug logging
+        console.log('Trajectory data loaded:', allTrajectoryData);
+        console.log('Available datasets:', Object.keys(allTrajectoryData));
+        
+        // Check if the selected dataset exists
+        if (!allTrajectoryData[dataset]) {
+            const availableDatasets = Object.keys(allTrajectoryData);
+            throw new Error(`Dataset "${dataset}" not found. Available: ${availableDatasets.join(', ')}`);
+        }
+        
+        const trajectoryData = allTrajectoryData[dataset];
+        console.log('Selected dataset data:', trajectoryData);
+        
+        // Validate data structure
+        if (!trajectoryData.coordinates || !trajectoryData.metadata) {
+            throw new Error('Invalid trajectory data structure - missing coordinates or metadata');
+        }
+        
+        console.log('✅ Trajectory data loaded, creating visualizations...');
+        
+        // Create all visualizations
         await Promise.all([
-            createTrajectoryPlot(trajectoryData, view),
-            createDensityPlot(trajectoryData),
-            createProportionPlot(trajectoryData),
-            createPseudotimeAnalysisPlot(trajectoryData)
+            createTrajectoryPlot(trajectoryData, view, dataset),
+            createDensityPlot(trajectoryData, dataset),
+            createProportionPlot(trajectoryData, dataset),
+            createPseudotimeAnalysisPlot(trajectoryData, dataset)
         ]);
         
-        console.log('✅ Trajectory visualizations created');
+        console.log('✅ All trajectory visualizations created');
         
     } catch (error) {
         console.error('❌ Error loading trajectory data:', error);
-        showTrajectoryError(error.message);
+        showTrajectoryError(`Failed to load trajectory data: ${error.message}`);
     } finally {
         if (loadTrajectoryBtn) {
             loadTrajectoryBtn.textContent = 'Load Trajectory';
@@ -1422,8 +1455,7 @@ async function loadTrajectoryData() {
     }
 }
 
-
-async function createTrajectoryPlot(trajectoryData, view) {
+async function createTrajectoryPlot(trajectoryData, view, dataset) {
     const container = document.getElementById('trajectory-plot');
     if (!container || !trajectoryData) return;
     
@@ -1431,24 +1463,34 @@ async function createTrajectoryPlot(trajectoryData, view) {
         const coordinates = trajectoryData.coordinates;
         const metadata = trajectoryData.metadata;
         
+        // Validate required data
+        if (!coordinates.Component_1 || !coordinates.Component_2) {
+            throw new Error('Missing coordinate data (Component_1, Component_2)');
+        }
+        
         let colorBy, colorData, title;
         
         switch(view) {
             case 'state':
+                if (!metadata.State) throw new Error('State data not available');
                 colorBy = 'State';
                 colorData = metadata.State;
-                title = 'Trajectory by State';
+                title = `Trajectory by State - ${dataset}`;
                 break;
             case 'celltype':
+                if (!metadata.harmony_annotation) throw new Error('Cell type data not available');
                 colorBy = 'Cell Type';
                 colorData = metadata.harmony_annotation;
-                title = 'Trajectory by Cell Type';
+                title = `Trajectory by Cell Type - ${dataset}`;
                 break;
             case 'pseudotime':
+                if (!metadata.Pseudotime) throw new Error('Pseudotime data not available');
                 colorBy = 'Pseudotime';
                 colorData = metadata.Pseudotime;
-                title = 'Trajectory by Pseudotime';
+                title = `Trajectory by Pseudotime - ${dataset}`;
                 break;
+            default:
+                throw new Error(`Unknown view type: ${view}`);
         }
         
         let traces;
@@ -1465,7 +1507,7 @@ async function createTrajectoryPlot(trajectoryData, view) {
                     type: 'scatter',
                     name: value,
                     marker: { size: 6, opacity: 0.8 },
-                    text: indices.map(i => coordinates.cell_ids[i]),
+                    text: indices.map(i => coordinates.cell_ids ? coordinates.cell_ids[i] : `Cell_${i}`),
                     hovertemplate: `
                         <b>%{text}</b><br>
                         Component 1: %{x:.2f}<br>
@@ -1487,14 +1529,18 @@ async function createTrajectoryPlot(trajectoryData, view) {
                     colorscale: 'Viridis',
                     size: 6,
                     opacity: 0.8,
-                    showscale: true
+                    showscale: true,
+                    colorbar: {
+                        title: 'Pseudotime',
+                        titleside: 'right'
+                    }
                 },
-                text: coordinates.cell_ids,
+                text: coordinates.cell_ids || coordinates.Component_1.map((_, i) => `Cell_${i}`),
                 hovertemplate: `
                     <b>%{text}</b><br>
                     Component 1: %{x:.2f}<br>
                     Component 2: %{y:.2f}<br>
-                    ${colorBy}: %{marker.color}<br>
+                    ${colorBy}: %{marker.color:.3f}<br>
                     <extra></extra>
                 `
             }];
@@ -1504,69 +1550,107 @@ async function createTrajectoryPlot(trajectoryData, view) {
             title: { text: title, font: { size: 16, color: '#333' } },
             xaxis: { title: 'Component 1' },
             yaxis: { title: 'Component 2' },
-            margin: { t: 60, r: 50, b: 50, l: 50 },
+            margin: { t: 60, r: view === 'pseudotime' ? 120 : 150, b: 50, l: 50 },
             showlegend: view !== 'pseudotime',
             legend: { 
                 orientation: 'v',
                 x: 1.02,
                 y: 1 
-            }
+            },
+            hovermode: 'closest'
+        };
+        
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            modeBarButtonsToRemove: ['pan2d', 'lasso2d', 'select2d'],
+            displaylogo: false
         };
         
         container.innerHTML = '';
-        await Plotly.newPlot(container, traces, layout, { responsive: true });
+        await Plotly.newPlot(container, traces, layout, config);
+        
+        setTimeout(() => {
+            Plotly.Plots.resize(container);
+        }, 100);
+        
+        console.log('✅ Trajectory plot created');
         
     } catch (error) {
-        console.error('Error creating trajectory plot:', error);
-        container.innerHTML = '<div class="error-message">Failed to create trajectory plot</div>';
+        console.error('❌ Error creating trajectory plot:', error);
+        container.innerHTML = `<div class="error-message">Failed to create trajectory plot: ${error.message}</div>`;
     }
 }
 
-async function createDensityPlot(trajectoryData) {
+async function createDensityPlot(trajectoryData, dataset) {
     const container = document.getElementById('trajectory-density-plot');
     if (!container || !trajectoryData) return;
     
     try {
         const metadata = trajectoryData.metadata;
+        
+        if (!metadata.harmony_annotation || !metadata.Pseudotime) {
+            throw new Error('Missing required data for density plot (harmony_annotation or Pseudotime)');
+        }
+        
         const cellTypes = [...new Set(metadata.harmony_annotation)];
         
         const traces = cellTypes.map(cellType => {
             const indices = metadata.harmony_annotation.map((ct, i) => ct === cellType ? i : -1).filter(i => i !== -1);
-            const pseudotimes = indices.map(i => metadata.Pseudotime[i]);
+            const pseudotimes = indices.map(i => metadata.Pseudotime[i]).filter(pt => !isNaN(pt));
             
             return {
                 x: pseudotimes,
                 type: 'histogram',
                 name: cellType,
                 opacity: 0.7,
-                histnorm: 'probability density'
+                histnorm: 'probability density',
+                nbinsx: 20
             };
         });
         
         const layout = {
-            title: { text: 'Pseudotime Density by Cell Type', font: { size: 16, color: '#333' } },
+            title: { text: `Pseudotime Density by Cell Type - ${dataset}`, font: { size: 16, color: '#333' } },
             xaxis: { title: 'Pseudotime' },
             yaxis: { title: 'Density' },
             barmode: 'overlay',
-            margin: { t: 60, r: 50, b: 50, l: 50 }
+            margin: { t: 60, r: 50, b: 50, l: 50 },
+            showlegend: true
+        };
+        
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            displaylogo: false
         };
         
         container.innerHTML = '';
-        await Plotly.newPlot(container, traces, layout, { responsive: true });
+        await Plotly.newPlot(container, traces, layout, config);
+        
+        setTimeout(() => {
+            Plotly.Plots.resize(container);
+        }, 100);
+        
+        console.log('✅ Density plot created');
         
     } catch (error) {
-        console.error('Error creating density plot:', error);
-        container.innerHTML = '<div class="error-message">Failed to create density plot</div>';
+        console.error('❌ Error creating density plot:', error);
+        container.innerHTML = `<div class="error-message">Failed to create density plot: ${error.message}</div>`;
     }
 }
 
-async function createProportionPlot(trajectoryData) {
+async function createProportionPlot(trajectoryData, dataset) {
     const container = document.getElementById('trajectory-proportion-plot');
     if (!container || !trajectoryData) return;
     
     try {
         const metadata = trajectoryData.metadata;
-        const states = [...new Set(metadata.State)];
+        
+        if (!metadata.State || !metadata.harmony_annotation) {
+            throw new Error('Missing required data for proportion plot (State or harmony_annotation)');
+        }
+        
+        const states = [...new Set(metadata.State)].sort();
         const cellTypes = [...new Set(metadata.harmony_annotation)];
         
         // Calculate proportions
@@ -1576,7 +1660,7 @@ async function createProportionPlot(trajectoryData) {
             
             return cellTypes.map(cellType => {
                 const count = stateCellTypes.filter(ct => ct === cellType).length;
-                return (count / stateIndices.length) * 100;
+                return stateIndices.length > 0 ? (count / stateIndices.length) * 100 : 0;
             });
         });
         
@@ -1591,32 +1675,35 @@ async function createProportionPlot(trajectoryData) {
         }));
         
         const layout = {
-            title: { text: 'Cell Type Proportions Across States', font: { size: 16, color: '#333' } },
+            title: { text: `Cell Type Proportions Across States - ${dataset}`, font: { size: 16, color: '#333' } },
             xaxis: { title: 'Pseudotime State' },
             yaxis: { title: 'Proportion (%)' },
-            margin: { t: 60, r: 50, b: 50, l: 50 }
+            margin: { t: 60, r: 50, b: 50, l: 50 },
+            showlegend: true
+        };
+        
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            displaylogo: false
         };
         
         container.innerHTML = '';
-        await Plotly.newPlot(container, traces, layout, { responsive: true });
+        await Plotly.newPlot(container, traces, layout, config);
+        
+        setTimeout(() => {
+            Plotly.Plots.resize(container);
+        }, 100);
+        
+        console.log('✅ Proportion plot created');
         
     } catch (error) {
-        console.error('Error creating proportion plot:', error);
-        container.innerHTML = '<div class="error-message">Failed to create proportion plot</div>';
+        console.error('❌ Error creating proportion plot:', error);
+        container.innerHTML = `<div class="error-message">Failed to create proportion plot: ${error.message}</div>`;
     }
 }
 
-function showTrajectoryError(message) {
-    const containers = ['trajectory-plot', 'trajectory-density-plot', 'trajectory-proportion-plot'];
-    containers.forEach(containerId => {
-        const container = document.getElementById(containerId);
-        if (container) {
-            container.innerHTML = `<div class="error-message">Error: ${message}</div>`;
-        }
-    });
-}
-
-async function createPseudotimeAnalysisPlot(trajectoryData) {
+async function createPseudotimeAnalysisPlot(trajectoryData, dataset) {
     const container = document.getElementById('pseudotime-analysis-plot');
     if (!container) return;
     
@@ -1626,88 +1713,138 @@ async function createPseudotimeAnalysisPlot(trajectoryData) {
         const selectedGene = pseudotimeGeneInput ? pseudotimeGeneInput.value.trim() : '';
         
         if (!selectedGene) {
-            container.innerHTML = '<div class="error-message">Please enter a gene name for pseudotime analysis</div>';
+            container.innerHTML = `
+                <div class="viz-placeholder">
+                    <p>📊 Enter a gene name above and click "Load Trajectory" to see expression over pseudotime</p>
+                    <small>Example genes: NOC2L, ISG15, TNFRSF4</small>
+                </div>
+            `;
             return;
         }
         
+        // FIXED: Use correct relative path
         const response = await fetch('./data/Pseudotime_Analysis.json');
-        if (!response.ok) throw new Error('Pseudotime data not available');
+        if (!response.ok) {
+            container.innerHTML = `
+                <div class="error-message">
+                    Pseudotime gene expression data not available
+                    <br><small>File: ./data/Pseudotime_Analysis.json not found</small>
+                </div>
+            `;
+            return;
+        }
         
         const pseudotimeData = await response.json();
         
         if (!pseudotimeData.genes_data || !pseudotimeData.genes_data[selectedGene]) {
-            const availableGenes = Object.keys(pseudotimeData.genes_data || {});
+            const availableGenes = Object.keys(pseudotimeData.genes_data || {}).slice(0, 20);
             container.innerHTML = `
                 <div class="error-message">
-                    <strong>Gene "${selectedGene}" not found</strong><br>
-                    Available: ${availableGenes.join(', ')}
-                </div>`;
+                    <strong>Gene "${selectedGene}" not found in pseudotime data</strong><br>
+                    <small>Available genes: ${availableGenes.join(', ')}${availableGenes.length === 20 ? '...' : ''}</small>
+                </div>
+            `;
             return;
         }
         
         const geneData = pseudotimeData.genes_data[selectedGene];
         
-        const traces = geneData.cell_types.map(cellType => ({
-            x: geneData.data[cellType].pseudotime,
-            y: geneData.data[cellType].expression,
-            mode: 'lines',
-            type: 'scatter',
-            name: cellType,
-            line: {
-                color: cellType === 'Healthy' ? '#56B4E9' : '#F8766D',
-                width: 3
-            }
-        }));
+        const traces = geneData.cell_types.map((cellType, index) => {
+            const data = geneData.data[cellType];
+            return {
+                x: data.pseudotime,
+                y: data.expression,
+                mode: 'lines',
+                type: 'scatter',
+                name: cellType,
+                line: {
+                    width: 3
+                }
+            };
+        });
         
         const layout = {
-            title: `${selectedGene} Expression Over Pseudotime`,
+            title: { 
+                text: `${selectedGene} Expression Over Pseudotime - ${dataset}`, 
+                font: { size: 16, color: '#333' } 
+            },
             xaxis: { title: 'Pseudotime' },
             yaxis: { title: 'Expression Level' },
-            showlegend: true
+            margin: { t: 60, r: 50, b: 50, l: 70 },
+            showlegend: true,
+            legend: {
+                orientation: 'v',
+                x: 1.02,
+                y: 1
+            }
+        };
+        
+        const config = {
+            responsive: true,
+            displayModeBar: true,
+            displaylogo: false
         };
         
         container.innerHTML = '';
-        await Plotly.newPlot(container, traces, layout, { responsive: true });
+        await Plotly.newPlot(container, traces, layout, config);
         
-        console.log('Pseudotime plot created for', selectedGene);
+        setTimeout(() => {
+            Plotly.Plots.resize(container);
+        }, 100);
+        
+        console.log('✅ Pseudotime analysis plot created for', selectedGene);
         
     } catch (error) {
-        console.error('Error creating pseudotime plot:', error);
-        container.innerHTML = `<div class="error-message">Error: ${error.message}</div>`;
+        console.error('❌ Error creating pseudotime plot:', error);
+        container.innerHTML = `<div class="error-message">Error creating pseudotime plot: ${error.message}</div>`;
     }
 }
 
-// Add this function to populate the pseudotime gene dropdown
+function showTrajectoryError(message) {
+    const containers = ['trajectory-plot', 'trajectory-density-plot', 'trajectory-proportion-plot', 'pseudotime-analysis-plot'];
+    containers.forEach(containerId => {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `
+                <div class="error-message">
+                    <strong>Error:</strong> ${message}
+                    <br><br>
+                    <button onclick="loadTrajectoryData()" style="margin-top: 10px;">🔄 Retry</button>
+                </div>
+            `;
+        }
+    });
+}
+
+// FIXED: Update populatePseudotimeGeneDropdown function
 async function populatePseudotimeGeneDropdown() {
     const dropdown = document.getElementById('pseudotime-gene');
     if (!dropdown) return;
     
     try {
+        // FIXED: Use correct relative path
         const response = await fetch('./data/Pseudotime_Analysis.json');
-        if (!response.ok) return;
+        if (!response.ok) {
+            console.log('Pseudotime data not available for gene dropdown');
+            return;
+        }
         
         const pseudotimeData = await response.json();
         const availableGenes = Object.keys(pseudotimeData.genes_data || {});
         
-        dropdown.innerHTML = '<option value="">Select gene for pseudotime...</option>';
+        // Set placeholder text with some example genes
+        dropdown.placeholder = availableGenes.length > 0 
+            ? `Enter gene name (e.g., ${availableGenes.slice(0, 3).join(', ')}...)`
+            : 'Enter gene name';
         
-        availableGenes.forEach(gene => {
-            const option = document.createElement('option');
-            option.value = gene;
-            option.textContent = gene;
-            dropdown.appendChild(option);
-        });
-        
-        if (availableGenes.length > 0) {
-            dropdown.value = availableGenes[0];
-        }
-        
-        console.log('Populated pseudotime gene dropdown with', availableGenes.length, 'genes');
+        console.log('✅ Pseudotime gene input ready with', availableGenes.length, 'available genes');
         
     } catch (error) {
-        console.log('Could not populate pseudotime gene dropdown:', error.message);
+        console.log('Could not load pseudotime gene data:', error.message);
+        dropdown.placeholder = 'Enter gene name (e.g., NOC2L, ISG15, TNFRSF4)';
     }
 }
+
 
 // ========== UTILITY FUNCTIONS ==========
 function generateColorMap(data, groupingVar) {
